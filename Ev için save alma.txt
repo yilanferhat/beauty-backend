@@ -1,0 +1,44 @@
+Bu, her yazılımcının her gün yaşadığı bir durumdur. İş bilgisayarından ev bilgisayarına geçiş yaparken en sık yapılan hata "kütüphaneleri" (MediaPipe, FastAPI vb.) unutmaktır.
+
+Eve gittiğinde "Module not found" hatası almadan, kaldığın yerden devam etmenin en kolay ve en garantili yolu şudur:
+
+Yöntem: "Paketle ve Götür" (USB veya Google Drive)
+Kodlarını bir çantaya koyup eve götürmek gibidir. Ancak çantaya "hangi aletleri kullandığının listesini" de koymamız lazım.
+
+Adım 1: İhtiyaç Listesini Çıkar (requirements.txt)
+Evdeki bilgisayarında Python olabilir ama mediapipe, fastapi, streamlit yüklü olmayabilir. Tek tek yüklemekle uğraşma.
+
+İş bilgisayarındaki terminale şu komutu yaz:
+
+PowerShell
+
+pip freeze > requirements.txt
+Ne Yapar? BeautyApp klasörüne requirements.txt adında bir dosya oluşturur. İçinde projede kullandığın tüm kütüphanelerin isimleri yazar.
+
+Adım 2: Klasörü Paketle (Ziple)
+Masaüstündeki BeautyApp klasörüne sağ tıkla -> Sıkıştır (Zip) de. (Önemli: Eğer klasörün içinde venv veya env diye çok şişman bir klasör varsa onu silip öyle ziple. O klasör sadece o bilgisayara özeldir, taşınmaz.)
+
+Bu Zip dosyasını Google Drive'a at veya USB belleğine yükle.
+
+Adım 3: Evde Kurulum (5 Dakika Sürer)
+Eve gidip bilgisayarını açtığında şunları yap:
+
+Python Yoksa Yükle: (Eğer yüklü değilse python.org'dan indir. Kurarken "Add Python to PATH" kutucuğunu mutlaka işaretle).
+
+Dosyayı İndir: Zip dosyasını Masaüstüne indir ve klasöre çıkart.
+
+VS Code ile Aç: Klasörü VS Code ile aç.
+
+Otomatik Yükleme: Terminali aç ve şu sihirli komutu yaz:
+
+PowerShell
+
+pip install -r requirements.txt
+Bu komut, iş bilgisayarındaki ortamın birebir aynısını evdeki bilgisayarına kuracak.
+
+Veritabanı Kontrol: beauty_tech.db dosyan zaten klasörün içinde olduğu için, iş yerinde kaydettiğin tüm veriler ve ürünler de evde aynen duruyor olacak.
+
+Özetle Eve Giderken Yanına Alman Gerekenler:
+Sadece Ziplenmiş BeautyApp Klasörü. (İçinde requirements.txt oluşturmayı unutma!)
+
+İyi yolculuklar ortak! Evden bağlandığında haber ver, kaldığımız yerden devam edelim. 🏠💻
