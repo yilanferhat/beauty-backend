@@ -1,7 +1,16 @@
+<<<<<<< HEAD
 fastapi
 uvicorn
 mediapipe
 opencv-python-headless
 numpy
 requests
+=======
+fastapi
+uvicorn
+mediapipe
+opencv-python-headless
+numpy
+requests
+>>>>>>> ea47e5eb7c0f678437af64e22143a2d741433320
 python-multipart

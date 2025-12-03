@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 {
     "PRODUCTS": [
         {
@@ -95,4 +96,103 @@
             "randevu_linki": "doktor.com/mehmet"
         }
     ]
+=======
+{
+    "PRODUCTS": [
+        {
+            "urun_id": 1,
+            "urun_adi": "Salisilik Asit Tonik",
+            "hedef_problem": "Problemli",
+            "esik_deger": 40,
+            "marka": "COSRX",
+            "alisveris_linki": "trendyol.com/salisilik",
+            "renk_kodu_bgr": [
+                0,
+                0,
+                255
+            ]
+        },
+        {
+            "urun_id": 2,
+            "urun_adi": "C Vitamini Serumu",
+            "hedef_problem": "Yorgun",
+            "esik_deger": 15,
+            "marka": "The Ordinary",
+            "alisveris_linki": "hepsiburada.com/cvitamin",
+            "renk_kodu_bgr": [
+                0,
+                255,
+                255
+            ]
+        },
+        {
+            "urun_id": 3,
+            "urun_adi": "Hafif Nemlendirici",
+            "hedef_problem": "Mükemmel",
+            "esik_deger": 0,
+            "marka": "Cerave",
+            "alisveris_linki": "amazon.com/nemlendirici",
+            "renk_kodu_bgr": [
+                0,
+                255,
+                0
+            ]
+        },
+        {
+            "urun_id": 999,
+            "urun_adi": "Kapatıcı Krem",
+            "hedef_problem": "Problemli",
+            "esik_deger": 30,
+            "marka": "L'oreal",
+            "alisveris_linki": "https://www.trendyol.com/l-oreal-paris/true-match-aydinlatan-serum-kapatici-2r-11-ml-p-820171298",
+            "renk_kodu_bgr": [
+                0,
+                249,
+                76
+            ]
+        }
+    ],
+    "LENS_COLORS": [
+        {
+            "isim": "Mavi Buz",
+            "bgr": [
+                255,
+                255,
+                0
+            ]
+        },
+        {
+            "isim": "Orman Yesili",
+            "bgr": [
+                0,
+                255,
+                0
+            ]
+        },
+        {
+            "isim": "Dogal (Siyah)",
+            "bgr": [
+                0,
+                0,
+                0
+            ]
+        }
+    ],
+    "DOCTORS": [
+        {
+            "doctor_id": 101,
+            "isim": "Dr. Eda",
+            "uzmanlik": "Dermatolog",
+            "klinik_adresi": "İstanbul, Kadıköy",
+            "randevu_linki": "doktor.com/eda"
+        },
+        {
+            "doctor_id": 201,
+            "isim": "Op. Dr. Mehmet",
+            "uzmanlik": "Plastik Cerrah",
+            "klinik_adresi": "İstanbul, Nişantaşı",
+            "randevu_linki": "doktor.com/mehmet"
+        }
+    ]
+>>>>>>> ea47e5eb7c0f678437af64e22143a2d741433320
 }
