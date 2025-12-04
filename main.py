@@ -4,9 +4,9 @@ import mediapipe as mp
 import numpy as np
 import database 
 
-app = FastAPI(title="BeautyTech AAA+ API", description="Ultra Profesyonel Cilt Analiz Motoru")
+app = FastAPI(title="BeautyTech Master API", description="Dermatolojik Seviye Cilt Analizi")
 
-# Veritabanını Başlat
+# Veritabanı Başlatma
 try:
     database.tablolari_olustur()
     database.baslangic_verisi_ekle()
@@ -22,135 +22,145 @@ face_mesh = mp_face_mesh.FaceMesh(
     min_detection_confidence=0.5
 )
 
-# --- YASAKLI BÖLGELER ---
-EXCLUDE_INDICES = [
-    33, 246, 161, 160, 159, 158, 157, 173, 133, 155, 154, 153, 144, 145, 153, 52, 65, 55, 
-    263, 466, 388, 387, 386, 385, 384, 398, 362, 382, 381, 380, 374, 373, 390, 249, 285, 
-    70, 63, 105, 66, 107, 55, 193, 
-    336, 296, 334, 293, 300, 285, 417, 
-    61, 146, 91, 181, 84, 17, 314, 405, 321, 375, 291, 308, 324, 318, 402, 317, 14, 87, 178, 88, 95, 78, 
-    2, 326, 327, 278, 279, 360, 363, 281, 5, 51, 48, 49, 131, 134, 115, 220
-]
-
-def analyze_skin_features(image, landmarks):
+def get_roi_region(image, landmarks, indices):
+    """Belirli yüz bölgelerini (Alın, Yanak) kesip alır"""
     h, w, c = image.shape
+    points = np.array([[int(landmarks.landmark[i].x * w), int(landmarks.landmark[i].y * h)] for i in indices], np.int32)
     
-    # 1. Maskeleme
-    face_mask = np.zeros((h, w), dtype=np.uint8)
-    face_oval = [10, 338, 297, 332, 284, 251, 389, 356, 454, 323, 361, 288, 397, 365, 379, 378, 400, 377, 152, 148, 176, 149, 150, 136, 172, 58, 132, 93, 234, 127, 162, 21, 54, 103, 67, 109]
-    face_pts = np.array([[int(landmarks.landmark[i].x * w), int(landmarks.landmark[i].y * h)] for i in face_oval], np.int32)
-    cv2.fillConvexPoly(face_mask, face_pts, 255)
+    # Bölgeyi maskele
+    mask = np.zeros((h, w), dtype=np.uint8)
+    cv2.fillConvexPoly(mask, points, 255)
     
-    exclusion_mask = np.zeros((h, w), dtype=np.uint8)
-    for idx in EXCLUDE_INDICES:
-        lm = landmarks.landmark[idx]
-        x, y = int(lm.x * w), int(lm.y * h)
-        cv2.circle(exclusion_mask, (x, y), 12, 255, -1) 
-        
-    final_skin_mask = cv2.bitwise_and(face_mask, cv2.bitwise_not(exclusion_mask))
+    # Siyah arka plan üzerine bölgeyi al
+    masked_image = cv2.bitwise_and(image, image, mask=mask)
     
-    # 2. Ön İşleme (Contrast Artırma - Kırışıklıklar belli olsun)
-    lab = cv2.cvtColor(image, cv2.COLOR_BGR2LAB)
-    l, a, b = cv2.split(lab)
-    clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8,8)) # Kontrastı artırdık
-    cl = clahe.apply(l)
-    enhanced = cv2.merge((cl,a,b))
-    enhanced = cv2.cvtColor(enhanced, cv2.COLOR_LAB2BGR)
-    gray = cv2.cvtColor(enhanced, cv2.COLOR_BGR2GRAY)
+    # Dikdörtgen olarak kırp (Gereksiz siyah alanları at)
+    x, y, w_rect, h_rect = cv2.boundingRect(points)
+    roi = masked_image[y:y+h_rect, x:x+w_rect]
+    return roi
 
-    # 3. Kırışıklık ve Leke Ayrımı (GEOMETRİK ZEKA)
+def calculate_texture_score(roi):
+    """
+    MASTER LEVEL TEKNİK: Laplacian Varyansı
+    Bu fonksiyon cildin 'Pürüzlülüğünü' matematiksel olarak ölçer.
+    Pürüzsüz Cilt = Düşük Varyans (örn: 50-100)
+    Kırışık/Bozuk Cilt = Yüksek Varyans (örn: 500-2000)
+    """
+    if roi.size == 0: return 0
     
-    # Kenar Algılama (Hassas)
-    edges = cv2.Canny(gray, 50, 150)
-    edges = cv2.bitwise_and(edges, edges, mask=final_skin_mask)
+    gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
     
-    contours, _ = cv2.findContours(edges, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    # Siyah alanları (maske dışı) analizden çıkar
+    # Sadece maskelenmiş (cilt olan) pikselleri al
+    pixels = gray[gray > 0]
     
-    leke_sayisi = 0
-    ciddi_leke = 0
-    kirisiklik_sayisi = 0
+    if len(pixels) == 0: return 0
     
+    # 1. Laplacian uygula (Doku detaylarını ortaya çıkarır)
+    laplacian = cv2.Laplacian(gray, cv2.CV_64F)
+    
+    # 2. Sadece cilt üzerindeki varyansı hesapla
+    score = laplacian[gray > 0].var()
+    return score
+
+def count_spots(roi):
+    """Yanaklardaki lekeleri sayar"""
+    if roi.size == 0: return 0
+    
+    gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
+    # Leke tespiti için yumuşatma
+    blur = cv2.medianBlur(gray, 5)
+    thresh = cv2.adaptiveThreshold(blur, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY_INV, 15, 4)
+    
+    # Sadece cilt üzerindekileri al
+    thresh = cv2.bitwise_and(thresh, thresh, mask=(gray > 0).astype(np.uint8))
+    
+    contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    
+    count = 0
     for cnt in contours:
         area = cv2.contourArea(cnt)
-        
-        # Çok küçük noktaları (gözenek/toz) direk at
-        if area < 10: continue
-        
-        # Geometri Analizi
-        x, y, w_rect, h_rect = cv2.boundingRect(cnt)
-        aspect_ratio = float(w_rect) / h_rect
-        
-        # Aspect Ratio düzeltmesi (Dik veya Yan olması fark etmez, uzunluğa bakıyoruz)
-        if aspect_ratio < 1: 
-            aspect_ratio = 1 / aspect_ratio
-            
-        # KARAR ANI:
-        
-        # Durum 1: İnce ve Uzunsa -> KIRIŞIKLIK
-        if aspect_ratio > 3.0 and area > 15:
-            kirisiklik_sayisi += 1
-            
-        # Durum 2: Kareye yakınsa (Yuvarlaksa) -> LEKE
-        elif aspect_ratio <= 3.0 and area > 20:
-             # Ekstra Yuvarlaklık Kontrolü
-            perimeter = cv2.arcLength(cnt, True)
-            if perimeter == 0: continue
-            circularity = 4 * np.pi * (area / (perimeter * perimeter))
-            
-            if circularity > 0.3:
-                leke_sayisi += 1
-                if area > 50: ciddi_leke += 1
-
-    return leke_sayisi, ciddi_leke, kirisiklik_sayisi
+        if 10 < area < 200: # Orta boy lekeler
+            count += 1
+    return count
 
 @app.post("/analiz_et")
 async def analiz_et(file: UploadFile = File(...)):
     contents = await file.read()
     nparr = np.frombuffer(contents, np.uint8)
     frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+    h, w, c = frame.shape
 
-    rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+    # Işık Dengeleme (CLAHE) - Her telefonda aynı sonucu versin diye
+    lab = cv2.cvtColor(frame, cv2.COLOR_BGR2LAB)
+    l, a, b = cv2.split(lab)
+    clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8,8))
+    cl = clahe.apply(l)
+    frame_balanced = cv2.cvtColor(cv2.merge((cl,a,b)), cv2.COLOR_LAB2BGR)
+
+    rgb_frame = cv2.cvtColor(frame_balanced, cv2.COLOR_BGR2RGB)
     results = face_mesh.process(rgb_frame)
     
     if not results.multi_face_landmarks:
         return {"status": "failed", "message": "Yuz bulunamadi"}
 
-    landmarks = results.multi_face_landmarks[0]
+    lm = results.multi_face_landmarks[0]
     
-    leke, ciddi, kirisik = analyze_skin_features(frame, landmarks)
+    # --- BÖLGESEL ANALİZ ---
     
-    # Skorlama (AAA+ Dengesi)
+    # 1. ALIN BÖLGESİ (Kırışıklık için en iyi yer)
+    # MediaPipe alın noktaları
+    forehead_indices = [10, 338, 297, 332, 284, 251, 389, 356, 454, 323, 361, 288, 397, 365, 379, 378, 400, 377, 152, 148, 176, 149, 150, 136, 172, 58, 132, 93, 234, 127, 162, 21, 54, 103, 67, 109]
+    forehead_roi = get_roi_region(frame_balanced, lm, forehead_indices)
     
-    # Kırışıklık puanı daha agresif düşmeli
-    kirisiklik_puani = max(0, 100 - (kirisik * 4)) # Çarpanı 3'ten 4'e çıkardık
+    # Alın Dokusu (Kırışıklık Skoru)
+    # Yaşlılarda bu değer 1000+, Pürüzsüzde 50-100 çıkar.
+    forehead_roughness = calculate_texture_score(forehead_roi)
+    
+    # 2. YANAK BÖLGESİ (Leke/Akne için en iyi yer)
+    left_cheek_indices = [234, 93, 132, 58, 172, 136, 150, 149, 176, 148, 152, 377, 400, 378, 379, 365, 397, 288, 361, 323, 454, 356] # Geniş yanak alanı
+    cheek_roi = get_roi_region(frame_balanced, lm, left_cheek_indices)
+    
+    cheek_spots = count_spots(cheek_roi)
+    
+    # --- SKORLAMA MANTIĞI (MASTER LEVEL) ---
+    
+    # Kırışıklık Puanı (Ters Orantı)
+    # Roughness (Pürüzlülük) arttıkça puan düşer.
+    # Normalizasyon: 0-100 arası 100 puan, 1500 üzeri 0 puan.
+    kirisiklik_puani = max(0, 100 - (forehead_roughness / 12)) 
     
     # Leke Puanı
-    leke_puani = max(0, 100 - ((leke * 0.5) + (ciddi * 2)))
+    leke_puani = max(0, 100 - (cheek_spots * 2))
     
-    # Genel Skor (En kötü olan özellik skoru aşağı çeker)
-    genel_skor = int((leke_puani * 0.4) + (kirisiklik_puani * 0.6)) # Kırışıklık daha önemli
+    # Genel Skor Ağırlıkları
+    # Kırışıklık %60, Leke %40 etki etsin (Yaşlanma belirtisi daha kritik)
+    genel_skor = int((kirisiklik_puani * 0.6) + (leke_puani * 0.4))
     
+    # Sorun Tespiti
     ana_sorun = "Mükemmel Cilt"
     if genel_skor < 90:
         if kirisiklik_puani < leke_puani:
-            ana_sorun = "Kırışıklık/Yaşlanma"
-        elif ciddi > 3:
-            ana_sorun = "Akne/Sivilce"
+            ana_sorun = "Kırışıklık/Doku Kaybı"
+        elif leke_puani < 60:
+            ana_sorun = "Akne/Geniş Gözenek"
         else:
-            ana_sorun = "Cilt Tonu Eşitsizliği"
+            ana_sorun = "Cilt Yorgunluğu"
 
-    onerilen_urun = database.en_uygun_urunu_bul(leke)
-    database.analiz_kaydet(leke, genel_skor, onerilen_urun['urun_adi'])
-
+    # Veritabanı
+    onerilen_urun = database.en_uygun_urunu_bul(cheek_spots)
+    database.analiz_kaydet(cheek_spots, genel_skor, onerilen_urun['urun_adi'])
+    
+    # Flutter'a giden veri
     return {
         "status": "success",
         "genel_skor": genel_skor,
         "detaylar": {
             "leke_skoru": int(leke_puani),
-            "leke_sayisi": leke,
-            "ciddi_leke": ciddi,
+            "leke_sayisi": cheek_spots, 
+            "ciddi_leke": 0, # Artık doku puanı kullanıyoruz
             "kirisiklik_skoru": int(kirisiklik_puani),
-            "kirisiklik_sayisi": kirisik,
+            "kirisiklik_sayisi": int(forehead_roughness), # Ekranda "Doku İndeksi" olarak gösterilebilir
             "ana_sorun": ana_sorun
         },
         "reçete": {
@@ -160,7 +170,7 @@ async def analiz_et(file: UploadFile = File(...)):
             "link": onerilen_urun['link']
         }
     }
-    
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="127.0.0.1", port=8000)
