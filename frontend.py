@@ -1,4 +1,3 @@
-<<<<<<< HEAD
 import streamlit as st
 import requests
 from PIL import Image
@@ -123,7 +122,7 @@ elif secim == "📊 Patron Ekrani (Admin)":
             st.table(urunler)
             
     else:
-=======
+
 import streamlit as st
 import requests
 from PIL import Image
@@ -248,5 +247,5 @@ elif secim == "📊 Patron Ekrani (Admin)":
             st.table(urunler)
             
     else:
->>>>>>> ea47e5eb7c0f678437af64e22143a2d741433320
+
         st.warning("Giris yapmak icin sifreyi giriniz.")

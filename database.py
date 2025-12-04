@@ -1,4 +1,3 @@
-<<<<<<< HEAD
 import sqlite3
 import datetime
 
