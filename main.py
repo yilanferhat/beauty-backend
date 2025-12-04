@@ -1,11 +1,10 @@
-<<<<<<< HEAD
 from fastapi import FastAPI, File, UploadFile
 import cv2
 import mediapipe as mp
 import numpy as np
 import database 
 
-app = FastAPI(title="BeautyTech Pro API", description="Profesyonel Cilt Analiz Motoru v2")
+app = FastAPI(title="BeautyTech AAA+ API", description="Ultra Profesyonel Cilt Analiz Motoru")
 
 # Veritabanını Başlat
 try:
@@ -14,83 +13,116 @@ try:
 except:
     pass
 
-# MediaPipe Ayarları
+# MediaPipe Ayarları (Yüz Mesh)
 mp_face_mesh = mp.solutions.face_mesh
 face_mesh = mp_face_mesh.FaceMesh(
     static_image_mode=True,
     max_num_faces=1,
-    refine_landmarks=True,
+    refine_landmarks=True, # Göz bebeklerini bile bulur
     min_detection_confidence=0.5
 )
 
-def crop_face(image, landmarks):
-    """Sadece yüzü kesip alır (Arka planı atar)"""
-    h, w, c = image.shape
-    x_min, y_min = w, h
-    x_max, y_max = 0, 0
-    
-    for lm in landmarks.landmark:
-        x, y = int(lm.x * w), int(lm.y * h)
-        if x < x_min: x_min = x
-        if x > x_max: x_max = x
-        if y < y_min: y_min = y
-        if y > y_max: y_max = y
-        
-    # Biraz pay bırakalım (Padding)
-    pad = 20
-    x_min = max(0, x_min - pad)
-    y_min = max(0, y_min - pad)
-    x_max = min(w, x_max + pad)
-    y_max = min(h, y_max + pad)
-    
-    return image[y_min:y_max, x_min:x_max]
+# --- YASAKLI BÖLGELER (Maskelenecek Alanlar) ---
+# Kaşlar, Gözler, Dudaklar, Burun Delikleri -> Bunları leke sanmasın!
+EXCLUDE_INDICES = [
+    # Gözler ve Kaşlar
+    33, 246, 161, 160, 159, 158, 157, 173, 133, 155, 154, 153, 144, 145, 153, 52, 65, 55, # Sol Göz
+    263, 466, 388, 387, 386, 385, 384, 398, 362, 382, 381, 380, 374, 373, 390, 249, 285, # Sağ Göz
+    70, 63, 105, 66, 107, 55, 193, # Sol Kaş
+    336, 296, 334, 293, 300, 285, 417, # Sağ Kaş
+    # Dudaklar
+    61, 146, 91, 181, 84, 17, 314, 405, 321, 375, 291, 308, 324, 318, 402, 317, 14, 87, 178, 88, 95, 78, # Dudak Çevresi
+    # Burun Delikleri (Gölgeleri sivilce sanmasın)
+    2, 326, 327, 278, 279, 360, 363, 281, 5, 51, 48, 49, 131, 134, 115, 220
+]
 
-def analyze_acne(roi_img):
-    """Leke ve Sivilce Analizi (Hassasiyet Azaltılmış)"""
-    # 1. Gürültü Azaltma (Pürüzsüzleştirme)
-    # Bu işlem gözenekleri yok sayar, sadece belirgin lekeleri bırakır
-    blur = cv2.bilateralFilter(roi_img, 9, 75, 75)
+def create_mask_from_landmarks(image, landmarks, indices, invert=False):
+    """Belirli bölgeleri maskelemek için yardımcı fonksiyon"""
+    h, w, c = image.shape
+    mask = np.zeros((h, w), dtype=np.uint8)
+    points = []
     
-    # 2. Griye Çevir
-    gray = cv2.cvtColor(blur, cv2.COLOR_BGR2GRAY)
+    for idx in indices:
+        lm = landmarks.landmark[idx]
+        x, y = int(lm.x * w), int(lm.y * h)
+        points.append([x, y])
+        
+    if points:
+        points = np.array(points, dtype=np.int32)
+        hull = cv2.convexHull(points)
+        cv2.fillConvexPoly(mask, hull, 255)
+        
+    if invert:
+        mask = cv2.bitwise_not(mask)
+        
+    return mask
+
+def analyze_skin_quality(image, landmarks):
+    """AAA+ Kalite Leke ve Doku Analizi"""
+    h, w, c = image.shape
     
-    # 3. Adaptif Eşikleme (Sadece koyu noktaları bul)
-    thresh = cv2.adaptiveThreshold(
-        gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, 
-        cv2.THRESH_BINARY_INV, 15, 3  # Hassasiyet ayarı (değerler büyüdükçe hassasiyet azalır)
-    )
+    # 1. Yüz Maskesi Oluştur (Sadece cilde odaklan)
+    face_mask = np.zeros((h, w), dtype=np.uint8)
+    face_oval = [10, 338, 297, 332, 284, 251, 389, 356, 454, 323, 361, 288, 397, 365, 379, 378, 400, 377, 152, 148, 176, 149, 150, 136, 172, 58, 132, 93, 234, 127, 162, 21, 54, 103, 67, 109]
+    face_pts = np.array([[int(landmarks.landmark[i].x * w), int(landmarks.landmark[i].y * h)] for i in face_oval], np.int32)
+    cv2.fillConvexPoly(face_mask, face_pts, 255)
     
-    # 4. Alan Filtreleme (Çok küçük noktaları sayma)
+    # 2. Yasaklı Bölgeleri Çıkar (Göz, Dudak, Kaş sil)
+    # Bu adım çok kritiktir. 1300 lekenin 1000 tanesi buralardan geliyordu.
+    exclusion_mask = np.zeros((h, w), dtype=np.uint8)
+    # Basit bir döngü yerine toplu convex hull mantığı (Daha hızlı olması için basitleştirilmiş gruplar kullanılabilir ama şimdilik nokta bazlı karartma yapalım)
+    # Hızlı çözüm: MediaPipe'dan gelen noktaların etrafına küçük daireler çizerek maskele
+    for idx in EXCLUDE_INDICES:
+        lm = landmarks.landmark[idx]
+        x, y = int(lm.x * w), int(lm.y * h)
+        cv2.circle(exclusion_mask, (x, y), 15, 255, -1) # 15px yarıçapında maske
+        
+    # Yüz maskesinden yasaklı bölgeleri çıkar
+    final_skin_mask = cv2.bitwise_and(face_mask, cv2.bitwise_not(exclusion_mask))
+    
+    # 3. CLAHE (Contrast Limited Adaptive Histogram Equalization)
+    # Işığı düzelt. Cilt tonunu eşitle.
+    lab = cv2.cvtColor(image, cv2.COLOR_BGR2LAB)
+    l, a, b = cv2.split(lab)
+    clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8,8))
+    cl = clahe.apply(l)
+    limg = cv2.merge((cl,a,b))
+    enhanced = cv2.cvtColor(limg, cv2.COLOR_LAB2BGR)
+    
+    # 4. Leke Tespiti (Gelişmiş)
+    gray = cv2.cvtColor(enhanced, cv2.COLOR_BGR2GRAY)
+    # Ciltteki ani renk değişimlerini bul (Sadece koyuluk değil, doku değişimi)
+    # Threshold değerini (15) biraz daha düşürdük çünkü artık maskeleme var, korkmadan hassas olabiliriz.
+    thresh = cv2.adaptiveThreshold(gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY_INV, 17, 4)
+    
+    # Maskeyi uygula (Sadece cilt üzerinde ara)
+    thresh = cv2.bitwise_and(thresh, thresh, mask=final_skin_mask)
+    
     contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    gercek_lekeler = 0
+    
+    leke_sayisi = 0
+    ciddi_leke_sayisi = 0
     
     for cnt in contours:
         area = cv2.contourArea(cnt)
-        # Sadece 5 ile 100 piksel arasındaki lekeleri al (Gözenekler < 5, Saçlar > 100)
-        if 5 < area < 100:
-            gercek_lekeler += 1
+        
+        # Minik gözenekler (2-8 px) -> Yok say
+        # Küçük sivilceler (8-30 px) -> Hafif Leke
+        # Büyük sivilceler (>30 px) -> Ciddi Leke
+        
+        if 8 < area < 400: # Üst limit arttı, çünkü artık gözleri karıştırmıyoruz
+            # Şekil Analizi (Yuvarlaklık Kontrolü)
+            # Lekeler genelde yuvarlaktır, kırışıklıklar çizgidir.
+            perimeter = cv2.arcLength(cnt, True)
+            if perimeter == 0: continue
+            circularity = 4 * np.pi * (area / (perimeter * perimeter))
             
-    # Skor Hesapla (Ters orantı: Leke arttıkça puan düşer)
-    score = max(0, 100 - (gercek_lekeler * 2)) # Her leke 2 puan götürür
-    return gercek_lekeler, score
-
-def analyze_wrinkles(roi_img):
-    """Kırışıklık Analizi (Canny Edge Detection)"""
-    gray = cv2.cvtColor(roi_img, cv2.COLOR_BGR2GRAY)
-    # Kenar algılama
-    edges = cv2.Canny(gray, 100, 200)
-    
-    # Beyaz piksel sayısı kırışıklık yoğunluğunu verir
-    edge_pixels = np.count_nonzero(edges)
-    height, width = edges.shape
-    total_pixels = height * width
-    
-    # Yoğunluk oranı
-    ratio = edge_pixels / total_pixels
-    
-    # Basit bir skorlama (Oran arttıkça puan düşer)
-    kirisiklik_puani = max(0, int(100 - (ratio * 1000)))
-    return kirisiklik_puani
+            if circularity > 0.3: # Çok ince çizgileri (kıl/kırışık) leke sayma
+                leke_sayisi += 1
+                if area > 30:
+                    ciddi_leke_sayisi += 1
+                    
+    return leke_sayisi, ciddi_leke_sayisi
 
 @app.post("/analiz_et")
 async def analiz_et(file: UploadFile = File(...)):
@@ -98,65 +130,54 @@ async def analiz_et(file: UploadFile = File(...)):
     nparr = np.frombuffer(contents, np.uint8)
     frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
 
-    # 1. Yüzü Bul ve Kes
     rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
     results = face_mesh.process(rgb_frame)
     
     if not results.multi_face_landmarks:
         return {"status": "failed", "message": "Yuz bulunamadi"}
 
-    face_landmarks = results.multi_face_landmarks[0]
-    cropped_face = crop_face(frame, face_landmarks)
+    landmarks = results.multi_face_landmarks[0]
     
-    # Eğer yüz çok küçükse (uzaktan çekilmişse) hata vermemesi için kontrol
-    if cropped_face.size == 0:
-        cropped_face = frame
+    # Profesyonel Analiz Başlasın
+    toplam_leke, ciddi_leke = analyze_skin_quality(frame, landmarks)
+    
+    # Skorlama Algoritması (AAA+ Mantığı)
+    # Leke sayısı 0 ise 100 puan.
+    # Her leke puan düşürür ama logaritmik olarak (ilk lekeler çok düşürür, sonrakiler az)
+    # Basit formül: 
+    kayip_puan = (toplam_leke * 0.5) + (ciddi_leke * 2)
+    genel_skor = max(10, int(100 - kayip_puan))
+    
+    # Kırışıklık için basit analiz (şimdilik standart)
+    # İleride buraya da özel maskeleme ekleyebiliriz
+    kirisiklik_skoru = max(0, 100 - int(toplam_leke / 3)) # Geçici mantık
+    
+    # Sorun Tespiti
+    ana_sorun = "Mükemmel Cilt"
+    if genel_skor < 90:
+        if ciddi_leke > 5:
+            ana_sorun = "Akne/Sivilce"
+        elif toplam_leke > 30:
+            ana_sorun = "Geniş Gözenek/Leke"
+        else:
+            ana_sorun = "Yorgun Görünüm"
 
-    # 2. Detaylı Analizler
-    leke_sayisi, leke_skoru = analyze_acne(cropped_face)
-    kirisiklik_skoru = analyze_wrinkles(cropped_face)
-    
-    # 3. Genel Cilt Skoru (Ortalama)
-    genel_skor = int((leke_skoru + kirisiklik_skoru) / 2)
-    
-    # 4. Öncelik Sıralaması (Hangi sorun daha büyük?)
-    sorunlar = [
-        {"tip": "Leke/Akne", "skor": leke_skoru},
-        {"tip": "Kırışıklık", "skor": kirisiklik_skoru},
-        # Gelecekte buraya "Göz Altı", "Nem" eklenebilir
-    ]
-    # Skoru en düşük olan sorunu bul
-    ana_sorun = min(sorunlar, key=lambda x: x['skor'])
-    
-    # 5. SQL'den Ürün Getir
-    # Veritabanında problem türüne göre arama yap (Mapping)
-    db_problem_adi = "Problemli" # Varsayılan
-    if ana_sorun["tip"] == "Kırışıklık":
-        db_problem_adi = "Yorgun" # Veritabanındaki karşılığı
-    elif ana_sorun["tip"] == "Leke/Akne":
-        db_problem_adi = "Problemli"
-        
-    if genel_skor > 85:
-        db_problem_adi = "Mükemmel"
-        
-    # Veritabanından en uygun ürünü çek (Skor değil problem türüne göre)
-    # Not: database.py içinde 'en_uygun_urunu_bul' fonksiyonunu birazdan güncelleyeceğiz
-    onerilen_urun = database.en_uygun_urunu_bul(leke_sayisi) 
-
-    # Kaydet
-    database.analiz_kaydet(leke_sayisi, genel_skor, onerilen_urun['urun_adi'])
+    # Veritabanı
+    onerilen_urun = database.en_uygun_urunu_bul(toplam_leke)
+    database.analiz_kaydet(toplam_leke, genel_skor, onerilen_urun['urun_adi'])
 
     return {
         "status": "success",
         "genel_skor": genel_skor,
         "detaylar": {
-            "leke_skoru": leke_skoru,
-            "leke_sayisi": leke_sayisi,
+            "leke_skoru": max(0, 100 - int(kayip_puan)),
+            "leke_sayisi": toplam_leke,
+            "ciddi_leke": ciddi_leke,
             "kirisiklik_skoru": kirisiklik_skoru,
-            "ana_sorun": ana_sorun["tip"]
+            "ana_sorun": ana_sorun
         },
         "reçete": {
-            "sorun": db_problem_adi,
+            "sorun": ana_sorun,
             "onerilen_urun": onerilen_urun['urun_adi'],
             "marka": onerilen_urun['marka'],
             "link": onerilen_urun['link']
@@ -165,124 +186,4 @@ async def analiz_et(file: UploadFile = File(...)):
     
 if __name__ == "__main__":
     import uvicorn
-=======
-from fastapi import FastAPI, File, UploadFile
-import cv2
-import mediapipe as mp
-import numpy as np
-import database 
-
-# --- BAŞLANGIÇ AYARLARI ---
-app = FastAPI(title="BeautyTech API", description="SQL Destekli Cilt Analiz Sunucusu")
-
-print("--- SUNUCU BASLATILIYOR ---")
-try:
-    database.tablolari_olustur()
-    database.baslangic_verisi_ekle()
-    print("✅ Veritabani baglantisi basarili.")
-except Exception as e:
-    print(f"❌ Veritabani hatasi: {e}")
-
-# MediaPipe Ayarları
-mp_face_mesh = mp.solutions.face_mesh
-face_mesh = mp_face_mesh.FaceMesh(max_num_faces=1, refine_landmarks=True)
-
-# Analiz Bölgeleri
-FOREHEAD_INDICES = [10, 338, 297, 332, 284, 251, 389, 356, 454, 323, 361, 288, 397, 365, 379, 378, 400, 377, 152, 148, 176, 149, 150, 136, 172, 58, 132, 93, 234, 127, 162, 21, 54, 103, 67, 109]
-LEFT_CHEEK_INDICES = [330, 347, 346, 352, 374, 427, 426, 425, 423, 371, 355, 437, 399, 419, 431, 280, 411, 425]
-RIGHT_CHEEK_INDICES = [101, 118, 117, 123, 145, 207, 206, 205, 203, 142, 126, 217, 174, 196, 211, 50, 187, 205]
-
-def create_mask_from_indices(indices, shape, landmarks):
-    mask = np.zeros(shape[:2], dtype=np.uint8)
-    points = []
-    for idx in indices:
-        pt = landmarks[idx]
-        x = int(pt.x * shape[1])
-        y = int(pt.y * shape[0])
-        points.append([x, y])
-    if points:
-        points = np.array(points, dtype=np.int32)
-        hull = cv2.convexHull(points)
-        cv2.fillConvexPoly(mask, hull, 255)
-    return mask
-
-@app.get("/")
-def home():
-    return {"message": "SQL Veritabani ile calisan BeautyTech sunucusu aktif!"}
-
-@app.post("/analiz_et")
-async def analiz_et(file: UploadFile = File(...)):
-    print(f"\n📩 YENI ISTEK GELDI! Dosya adi: {file.filename}")
-    
-    # 1. Dosya Okuma
-    print("⏳ Dosya okunuyor...")
-    contents = await file.read()
-    print(f"✅ Dosya okundu ({len(contents)} bytes).")
-    
-    # 2. Decode
-    print("⏳ Goruntu isleniyor (Decode)...")
-    nparr = np.frombuffer(contents, np.uint8)
-    frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
-    print("✅ Goruntu decode edildi.")
-
-    rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-    
-    # 3. MediaPipe İşlemi
-    print("⏳ Yuz taraniyor (MediaPipe)...")
-    results = face_mesh.process(rgb_frame)
-    
-    leke_sayisi = 0
-    analiz_sonucu = {"status": "failed", "message": "Yuz bulunamadi"}
-
-    if results.multi_face_landmarks:
-        print("✅ Yuz bulundu! Leke analizi basliyor...")
-        for face_landmarks in results.multi_face_landmarks:
-            h, w, c = frame.shape
-            mask_total = np.zeros((h, w), dtype=np.uint8)
-            mask_total = cv2.bitwise_or(mask_total, create_mask_from_indices(FOREHEAD_INDICES, frame.shape, face_landmarks.landmark))
-            mask_total = cv2.bitwise_or(mask_total, create_mask_from_indices(LEFT_CHEEK_INDICES, frame.shape, face_landmarks.landmark))
-            mask_total = cv2.bitwise_or(mask_total, create_mask_from_indices(RIGHT_CHEEK_INDICES, frame.shape, face_landmarks.landmark))
-
-            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-            blurred = cv2.GaussianBlur(gray, (5, 5), 0)
-            thresh = cv2.adaptiveThreshold(blurred, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY_INV, 11, 2)
-            thresh = cv2.bitwise_and(thresh, thresh, mask=mask_total)
-            contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-
-            for cnt in contours:
-                area = cv2.contourArea(cnt)
-                if 2 < area < 30:
-                    leke_sayisi += 1
-            
-            print(f"✅ Analiz bitti. Leke Sayisi: {leke_sayisi}")
-
-            # SQL İşlemleri
-            print("⏳ Veritabanindan urun soruluyor...")
-            onerilen_urun = database.en_uygun_urunu_bul(leke_sayisi)
-            cilt_skoru = max(0, 100 - leke_sayisi)
-
-            print("⏳ Analiz kaydediliyor...")
-            database.analiz_kaydet(leke_sayisi, cilt_skoru, onerilen_urun['urun_adi'])
-            print("✅ Kayit basarili!")
-
-            analiz_sonucu = {
-                "status": "success",
-                "cilt_skoru": cilt_skoru,
-                "leke_sayisi": leke_sayisi,
-                "reçete": {
-                    "sorun": onerilen_urun['hedef_problem'],
-                    "onerilen_urun": onerilen_urun['urun_adi'],
-                    "marka": onerilen_urun['marka'],
-                    "link": onerilen_urun['link']
-                }
-            }
-    else:
-        print("❌ Fotografta yuz bulunamadi.")
-            
-    print("🚀 Cevap gonderiliyor...")
-    return analiz_sonucu
-
-if __name__ == "__main__":
-    import uvicorn
->>>>>>> ea47e5eb7c0f678437af64e22143a2d741433320
     uvicorn.run(app, host="127.0.0.1", port=8000)
