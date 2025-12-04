@@ -33,10 +33,9 @@ EXCLUDE_INDICES = [
 ]
 
 def analyze_skin_features(image, landmarks):
-    """Hem Leke Hem Kırışıklık İçin Ortak ve Akıllı Analiz"""
     h, w, c = image.shape
     
-    # 1. Maskeleme (Yüzü al, gözleri/ağzı çıkar)
+    # 1. Maskeleme
     face_mask = np.zeros((h, w), dtype=np.uint8)
     face_oval = [10, 338, 297, 332, 284, 251, 389, 356, 454, 323, 361, 288, 397, 365, 379, 378, 400, 377, 152, 148, 176, 149, 150, 136, 172, 58, 132, 93, 234, 127, 162, 21, 54, 103, 67, 109]
     face_pts = np.array([[int(landmarks.landmark[i].x * w), int(landmarks.landmark[i].y * h)] for i in face_oval], np.int32)
@@ -50,60 +49,58 @@ def analyze_skin_features(image, landmarks):
         
     final_skin_mask = cv2.bitwise_and(face_mask, cv2.bitwise_not(exclusion_mask))
     
-    # 2. Ön İşleme (Işık Dengeleme)
+    # 2. Ön İşleme (Contrast Artırma - Kırışıklıklar belli olsun)
     lab = cv2.cvtColor(image, cv2.COLOR_BGR2LAB)
     l, a, b = cv2.split(lab)
-    clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8,8))
+    clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8,8)) # Kontrastı artırdık
     cl = clahe.apply(l)
     enhanced = cv2.merge((cl,a,b))
     enhanced = cv2.cvtColor(enhanced, cv2.COLOR_LAB2BGR)
-    
-    # 3. Leke Analizi (Yuvarlak Nesneler)
     gray = cv2.cvtColor(enhanced, cv2.COLOR_BGR2GRAY)
-    blur_leke = cv2.bilateralFilter(gray, 15, 75, 75)
-    thresh_leke = cv2.adaptiveThreshold(blur_leke, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY_INV, 19, 5)
-    thresh_leke = cv2.bitwise_and(thresh_leke, thresh_leke, mask=final_skin_mask)
+
+    # 3. Kırışıklık ve Leke Ayrımı (GEOMETRİK ZEKA)
     
-    contours_leke, _ = cv2.findContours(thresh_leke, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    # Kenar Algılama (Hassas)
+    edges = cv2.Canny(gray, 50, 150)
+    edges = cv2.bitwise_and(edges, edges, mask=final_skin_mask)
+    
+    contours, _ = cv2.findContours(edges, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     
     leke_sayisi = 0
     ciddi_leke = 0
+    kirisiklik_sayisi = 0
     
-    for cnt in contours_leke:
+    for cnt in contours:
         area = cv2.contourArea(cnt)
-        if 15 < area < 300: # Hassasiyet ayarı: Çok küçükleri at
+        
+        # Çok küçük noktaları (gözenek/toz) direk at
+        if area < 10: continue
+        
+        # Geometri Analizi
+        x, y, w_rect, h_rect = cv2.boundingRect(cnt)
+        aspect_ratio = float(w_rect) / h_rect
+        
+        # Aspect Ratio düzeltmesi (Dik veya Yan olması fark etmez, uzunluğa bakıyoruz)
+        if aspect_ratio < 1: 
+            aspect_ratio = 1 / aspect_ratio
+            
+        # KARAR ANI:
+        
+        # Durum 1: İnce ve Uzunsa -> KIRIŞIKLIK
+        if aspect_ratio > 3.0 and area > 15:
+            kirisiklik_sayisi += 1
+            
+        # Durum 2: Kareye yakınsa (Yuvarlaksa) -> LEKE
+        elif aspect_ratio <= 3.0 and area > 20:
+             # Ekstra Yuvarlaklık Kontrolü
             perimeter = cv2.arcLength(cnt, True)
             if perimeter == 0: continue
             circularity = 4 * np.pi * (area / (perimeter * perimeter))
-            if circularity > 0.4: # Yuvarlaksa lekedir
-                leke_sayisi += 1
-                if area > 40: ciddi_leke += 1
-
-    # 4. Kırışıklık Analizi (Çizgisel Nesneler)
-    # Kırışıklık için daha farklı bir filtreleme
-    # Sobel veya Canny kullanacağız ama Morphological Open ile noktaları yok edeceğiz
-    
-    edges = cv2.Canny(blur_leke, 30, 100) # Kenarları bul
-    edges = cv2.bitwise_and(edges, edges, mask=final_skin_mask)
-    
-    # MORFOLOJİK TEMİZLİK (Sırrı burada)
-    # Sadece uzun çizgileri tut, noktaları sil
-    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3,3))
-    # Opening: Erozyon + Genişleme (Küçük noktaları yok eder)
-    cleaned_edges = cv2.morphologyEx(edges, cv2.MORPH_OPEN, kernel) 
-    
-    contours_kirisik, _ = cv2.findContours(cleaned_edges, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    
-    kirisiklik_sayisi = 0
-    
-    for cnt in contours_kirisik:
-        # Sadece uzunluk kontrolü
-        length = cv2.arcLength(cnt, True) # True: kapalı, False: açık. Kırışık açıktır ama contour kapalı döner.
-        
-        # Eğer çizgi 30 pikselden kısaysa görmezden gel (Tüy veya gözenektir)
-        if length > 30: 
-            kirisiklik_sayisi += 1
             
+            if circularity > 0.3:
+                leke_sayisi += 1
+                if area > 50: ciddi_leke += 1
+
     return leke_sayisi, ciddi_leke, kirisiklik_sayisi
 
 @app.post("/analiz_et")
@@ -120,30 +117,27 @@ async def analiz_et(file: UploadFile = File(...)):
 
     landmarks = results.multi_face_landmarks[0]
     
-    # Detaylı Analiz
     leke, ciddi, kirisik = analyze_skin_features(frame, landmarks)
     
-    # Skorlama (Daha adil bir sistem)
-    # Her kırışıklık 3 puan götürür
-    kirisiklik_puani = max(0, 100 - (kirisik * 3))
+    # Skorlama (AAA+ Dengesi)
+    
+    # Kırışıklık puanı daha agresif düşmeli
+    kirisiklik_puani = max(0, 100 - (kirisik * 4)) # Çarpanı 3'ten 4'e çıkardık
     
     # Leke Puanı
     leke_puani = max(0, 100 - ((leke * 0.5) + (ciddi * 2)))
     
-    # Genel Skor Ortalaması
-    genel_skor = int((leke_puani + kirisiklik_puani) / 2)
+    # Genel Skor (En kötü olan özellik skoru aşağı çeker)
+    genel_skor = int((leke_puani * 0.4) + (kirisiklik_puani * 0.6)) # Kırışıklık daha önemli
     
-    # Sorun Tespiti
     ana_sorun = "Mükemmel Cilt"
-    if genel_skor < 92:
+    if genel_skor < 90:
         if kirisiklik_puani < leke_puani:
-            ana_sorun = "İnce Kırışıklıklar"
-        elif ciddi > 5:
+            ana_sorun = "Kırışıklık/Yaşlanma"
+        elif ciddi > 3:
             ana_sorun = "Akne/Sivilce"
-        elif leke > 20:
-            ana_sorun = "Geniş Gözenek"
         else:
-            ana_sorun = "Yorgun Görünüm"
+            ana_sorun = "Cilt Tonu Eşitsizliği"
 
     onerilen_urun = database.en_uygun_urunu_bul(leke)
     database.analiz_kaydet(leke, genel_skor, onerilen_urun['urun_adi'])
@@ -156,7 +150,7 @@ async def analiz_et(file: UploadFile = File(...)):
             "leke_sayisi": leke,
             "ciddi_leke": ciddi,
             "kirisiklik_skoru": int(kirisiklik_puani),
-            "kirisiklik_sayisi": kirisik, # Bunu da görmek için ekledik
+            "kirisiklik_sayisi": kirisik,
             "ana_sorun": ana_sorun
         },
         "reçete": {
