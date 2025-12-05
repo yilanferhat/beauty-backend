@@ -1,109 +1,101 @@
 import sqlite3
-import datetime
 
-DB_NAME = "beauty_tech.db"
+# --- GÜNCELLENMİŞ AKILLI KATALOG (ARAMA LİNKLERİ) ---
+# Linklerin hepsi Trendyol Arama Sonuçlarına gider.
+# Böylece "Ürün tükendi" hatası asla alınmaz.
 
-def baglanti_al():
-    return sqlite3.connect(DB_NAME)
+URUN_KATALOGU = {
+    "akne_yogun": {
+        "urun_adi": "La Roche-Posay Effaclar Duo(+)",
+        "marka": "La Roche-Posay",
+        # Link: "La Roche Posay Effaclar Duo" araması
+        "link": "https://www.trendyol.com/sr?q=la%20roche%20posay%20effaclar%20duo", 
+        "fiyat_araligi": "Orta"
+    },
+    "akne_hafif": {
+        "urun_adi": "CeraVe Blemish Control Gel",
+        "marka": "CeraVe",
+        # Link: "CeraVe Blemish Control" araması
+        "link": "https://www.trendyol.com/sr?q=cerave%20blemish%20control%20gel",
+        "fiyat_araligi": "Uygun"
+    },
+    "kirisiklik_derin": {
+        "urun_adi": "Estée Lauder Advanced Night Repair",
+        "marka": "Estée Lauder",
+        # Link: "Estee Lauder Advanced Night Repair" araması
+        "link": "https://www.trendyol.com/sr?q=estee%20lauder%20advanced%20night%20repair",
+        "fiyat_araligi": "Premium"
+    },
+    "kirisiklik_ince": {
+        "urun_adi": "The Ordinary Retinol 0.5%",
+        "marka": "The Ordinary",
+        # Link: "The Ordinary Retinol" araması
+        "link": "https://www.trendyol.com/sr?q=the%20ordinary%20retinol",
+        "fiyat_araligi": "Uygun"
+    },
+    "leke": {
+        "urun_adi": "SkinCeuticals Discoloration Defense",
+        "marka": "SkinCeuticals",
+        # Link: "SkinCeuticals Discoloration" araması
+        "link": "https://www.trendyol.com/sr?q=skinceuticals%20discoloration",
+        "fiyat_araligi": "Premium"
+    },
+    "normal": {
+        "urun_adi": "Kiehl's Ultra Facial Cream",
+        "marka": "Kiehl's",
+        # Link: "Kiehls Ultra Facial Cream" araması
+        "link": "https://www.trendyol.com/sr?q=kiehls%20ultra%20facial%20cream",
+        "fiyat_araligi": "Orta"
+    }
+}
 
 def tablolari_olustur():
-    conn = baglanti_al()
+    """Veritabanı tablosunu oluşturur (Eğer yoksa)"""
+    conn = sqlite3.connect('beauty.db')
     cursor = conn.cursor()
-    
-    # Analiz Sonuçları Tablosu
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS analizler (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            tarih TEXT,
+            tarih TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             leke_sayisi INTEGER,
-            cilt_skoru INTEGER,
+            genel_skor INTEGER,
             onerilen_urun TEXT
         )
     ''')
-    
-    # Ürünler Tablosu
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS urunler (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            hedef_problem TEXT,
-            urun_adi TEXT,
-            marka TEXT,
-            min_leke INTEGER,
-            max_leke INTEGER,
-            link TEXT
-        )
-    ''')
-    
     conn.commit()
     conn.close()
 
 def baslangic_verisi_ekle():
-    conn = baglanti_al()
-    cursor = conn.cursor()
-    
-    # Önce tablo boş mu kontrol et
-    cursor.execute("SELECT count(*) FROM urunler")
-    count = cursor.fetchone()[0]
-    
-    if count == 0:
-        urunler = [
-            ("Mükemmel", "Günlük Nemlendirici", "Cerave", 0, 5, "https://ornek.com/nemlendirici"),
-            ("Hafif Leke", "C Vitamini Serumu", "La Roche Posay", 6, 20, "https://ornek.com/c-vitamini"),
-            ("Orta Leke", "Niacinamide %10", "The Ordinary", 21, 50, "https://ornek.com/niacinamide"),
-            ("Ciddi Leke", "AHA/BHA Peeling", "The Ordinary", 51, 100, "https://ornek.com/peeling"),
-            ("Akne/Sivilce", "Salisilik Asit Temizleyici", "Cosmed", 101, 500, "https://ornek.com/akne"),
-            ("Kırışıklık", "Retinol %0.5", "Loreal", 501, 1000, "https://ornek.com/retinol"),
-            ("Yorgun Görünüm", "Kafein Göz Serumu", "Revolution", 1001, 5000, "https://ornek.com/goz-serumu")
-        ]
-        
-        cursor.executemany('''
-            INSERT INTO urunler (hedef_problem, urun_adi, marka, min_leke, max_leke, link)
-            VALUES (?, ?, ?, ?, ?, ?)
-        ''', urunler)
-        
+    pass 
+
+def analiz_kaydet(leke_sayisi, genel_skor, onerilen_urun):
+    try:
+        conn = sqlite3.connect('beauty.db')
+        cursor = conn.cursor()
+        cursor.execute('INSERT INTO analizler (leke_sayisi, genel_skor, onerilen_urun) VALUES (?, ?, ?)',
+                       (leke_sayisi, genel_skor, onerilen_urun))
         conn.commit()
-    
-    conn.close()
+        conn.close()
+    except Exception as e:
+        print(f"Kayıt Hatası: {e}")
 
-def analiz_kaydet(leke_sayisi, cilt_skoru, onerilen_urun):
-    conn = baglanti_al()
-    cursor = conn.cursor()
-    tarih = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+def en_uygun_urunu_bul(leke_sayisi, kirisiklik_indeksi=0):
+    """
+    Analiz sonuçlarına göre katalogdan EN DOĞRU ürünü seçer.
+    """
+    # 1. Kırışıklık Durumu
+    if kirisiklik_indeksi > 80:
+        return URUN_KATALOGU["kirisiklik_derin"]
+    elif kirisiklik_indeksi > 30:
+        return URUN_KATALOGU["kirisiklik_ince"]
     
-    cursor.execute('''
-        INSERT INTO analizler (tarih, leke_sayisi, cilt_skoru, onerilen_urun)
-        VALUES (?, ?, ?, ?)
-    ''', (tarih, leke_sayisi, cilt_skoru, onerilen_urun))
+    # 2. Leke Durumu
+    if leke_sayisi > 30:
+        return URUN_KATALOGU["akne_yogun"]
+    elif leke_sayisi > 10:
+        return URUN_KATALOGU["akne_hafif"]
+    elif leke_sayisi > 0:
+        return URUN_KATALOGU["leke"]
     
-    conn.commit()
-    conn.close()
-
-def en_uygun_urunu_bul(leke_sayisi):
-    conn = baglanti_al()
-    cursor = conn.cursor()
-    
-    # Leke sayısına göre aralık sorgusu
-    cursor.execute('''
-        SELECT hedef_problem, urun_adi, marka, link 
-        FROM urunler 
-        WHERE ? BETWEEN min_leke AND max_leke
-    ''', (leke_sayisi,))
-    
-    sonuc = cursor.fetchone()
-    conn.close()
-    
-    if sonuc:
-        return {
-            "hedef_problem": sonuc[0],
-            "urun_adi": sonuc[1],
-            "marka": sonuc[2],
-            "link": sonuc[3]
-        }
-    else:
-        # Aralık dışındaysa varsayılan bir ürün döndür
-        return {
-            "hedef_problem": "Genel Bakım",
-            "urun_adi": "Onarıcı Bakım Kremi",
-            "marka": "Bioderma",
-            "link": "https://ornek.com/genel"
-        }
+    # 3. Sorunsuz Cilt
+    return URUN_KATALOGU["normal"]
