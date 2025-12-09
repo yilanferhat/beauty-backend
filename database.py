@@ -1,48 +1,38 @@
 import sqlite3
 
-# --- GÜNCELLENMİŞ "SÜRÜMDEN KAZANMA" KATALOĞU ---
-# Strateji: Pahalı ürün satılmaz. L'Oreal, Nivea, Garnier gibi
-# herkesin bildiği ve sepetine kolayca atacağı ürünleri koyduk.
-
+# --- CİLT TİPİNE ÖZEL KATALOG ---
 URUN_KATALOGU = {
-    # 1. AKNE / SİVİLCE (Garnier - Uygun Fiyat)
-    "akne_yogun": {
-        "urun_adi": "Garnier Saf & Temiz 3'ü 1 Arada",
-        "marka": "Garnier",
-        "link": "https://www.trendyol.com/sr?q=garnier%20saf%20ve%20temiz",
+    # KURU CİLT (Yoğun Nemlendirici - CeraVe)
+    "kuru": {
+        "urun_adi": "CeraVe Nemlendirici Krem (Kuru Ciltler)",
+        "marka": "CeraVe",
+        "link": "https://www.trendyol.com/sr?q=cerave%20nemlendirici%20krem",
         "fiyat_araligi": "Uygun"
     },
-    # 2. HAFİF PÜRÜZLER (Nivea - Orta Fiyat)
-    "akne_hafif": {
-        "urun_adi": "Nivea Derma Skin Clear",
-        "marka": "Nivea",
-        "link": "https://www.trendyol.com/sr?q=nivea%20derma%20skin",
-        "fiyat_araligi": "Uygun"
-    },
-    # 3. DERİN KIRIŞIKLIK (L'Oreal Revitalift - Çok Satan)
-    "kirisiklik_derin": {
-        "urun_adi": "L'Oreal Paris Revitalift Laser X3",
-        "marka": "L'Oreal Paris",
-        "link": "https://www.trendyol.com/sr?q=loreal%20revitalift%20laser",
+    # YAĞLI CİLT (Parlama Karşıtı - La Roche)
+    "yagli": {
+        "urun_adi": "La Roche-Posay Effaclar Jel (Yağlı Ciltler)",
+        "marka": "La Roche-Posay",
+        "link": "https://www.trendyol.com/sr?q=la%20roche%20posay%20effaclar%20jel",
         "fiyat_araligi": "Orta"
     },
-    # 4. İNCE ÇİZGİLER (L'Oreal Hyaluron - Popüler)
-    "kirisiklik_ince": {
-        "urun_adi": "L'Oreal Paris Hyaluron Uzmanı",
-        "marka": "L'Oreal Paris",
-        "link": "https://www.trendyol.com/sr?q=loreal%20hyaluron%20uzman%C4%B1",
-        "fiyat_araligi": "Uygun"
-    },
-    # 5. LEKE (Nivea Luminous - Etkili ve Ulaşılabilir)
+    # LEKE SORUNU
     "leke": {
         "urun_adi": "Nivea Luminous 630 Leke Karşıtı",
         "marka": "Nivea",
         "link": "https://www.trendyol.com/sr?q=nivea%20luminous",
         "fiyat_araligi": "Orta"
     },
-    # 6. GENEL BAKIM / SORUNSUZ (Nivea Aqua - Herkese Lazım)
+    # KIRIŞIKLIK
+    "kirisik": {
+        "urun_adi": "L'Oreal Paris Revitalift Laser X3",
+        "marka": "L'Oreal Paris",
+        "link": "https://www.trendyol.com/sr?q=loreal%20revitalift%20laser",
+        "fiyat_araligi": "Orta"
+    },
+    # NORMAL / STANDART
     "normal": {
-        "urun_adi": "Nivea Aqua Sensation Jel Krem",
+        "urun_adi": "Nivea Aqua Sensation",
         "marka": "Nivea",
         "link": "https://www.trendyol.com/sr?q=nivea%20aqua%20sensation",
         "fiyat_araligi": "Uygun"
@@ -50,7 +40,6 @@ URUN_KATALOGU = {
 }
 
 def tablolari_olustur():
-    """Veritabanı tablosunu oluşturur"""
     conn = sqlite3.connect('beauty.db')
     cursor = conn.cursor()
     cursor.execute('''
@@ -76,33 +65,28 @@ def analiz_kaydet(leke_sayisi, genel_skor, onerilen_urun):
                        (leke_sayisi, genel_skor, onerilen_urun))
         conn.commit()
         conn.close()
-    except Exception as e:
-        print(f"Kayıt Hatası: {e}")
+    except:
+        pass
 
-def en_uygun_urunu_bul(leke_sayisi, kirisiklik_indeksi=0):
+def en_uygun_urunu_bul(leke_sayisi, kirisiklik_indeksi, cilt_tipi="normal"):
     """
-    Analiz sonuçlarına göre katalogdan EN DOĞRU ürünü seçer.
-    MANTIK GÜNCELLENDİ: Eşikler yükseltildi, artık herkes 'kırışık' çıkmayacak.
+    Önce Cilt Tipine bakar, sonra sorunlara bakar.
     """
+    # 1. Cilt Tipi Analizi (Kuruysa direkt nemlendirici ver)
+    if cilt_tipi == "Kuru Cilt":
+        return URUN_KATALOGU["kuru"]
     
-    # Kırışıklık Eşikleri Yükseltildi (Daha zor tetiklenir)
-    # Eskiden 80 idi, şimdi 120. Yani gerçekten kırışık olması lazım.
-    if kirisiklik_indeksi > 120:
-        return URUN_KATALOGU["kirisiklik_derin"]
+    if cilt_tipi == "Yağlı Cilt":
+        # Yağlı ama aynı zamanda çok lekeli ise leke kremi ver
+        if leke_sayisi > 20:
+             return URUN_KATALOGU["leke"]
+        return URUN_KATALOGU["yagli"]
+
+    # 2. Sorun Bazlı Analiz (Normal/Karma Ciltler için)
+    if kirisiklik_indeksi > 100:
+        return URUN_KATALOGU["kirisik"]
     
-    # Leke Eşikleri (Önce lekeye bakıyoruz çünkü gençler daha çok leke/sivilce arıyor)
-    if leke_sayisi > 25:
-        return URUN_KATALOGU["akne_yogun"]
-    elif leke_sayisi > 10:
-        return URUN_KATALOGU["akne_hafif"]
-    
-    # İnce Çizgi Kontrolü (Leke yoksa buraya düşer)
-    if kirisiklik_indeksi > 40:
-        return URUN_KATALOGU["kirisiklik_ince"]
-    
-    # Hafif Leke Kontrolü
-    if leke_sayisi > 3:
+    if leke_sayisi > 15:
         return URUN_KATALOGU["leke"]
     
-    # Hiçbir şeye uymuyorsa "Nemlendirici" ver (En güvenli liman)
     return URUN_KATALOGU["normal"]
