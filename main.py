@@ -4,15 +4,14 @@ import cv2
 import mediapipe as mp
 import numpy as np
 import database 
-import traceback # Hata takibi için
+import traceback 
 
 # ==========================================
-# 1. UYGULAMA VE AYARLAR
+# 1. UYGULAMA AYARLARI (ELON MUSK LEVEL 🚀)
 # ==========================================
 
-app = FastAPI(title="BeautyTech Master API", description="Medical Grade Skin Analysis")
+app = FastAPI(title="BeautyTech Ultra AI", description="Next-Gen Skin Analysis Kernel")
 
-# CORS (Güvenlik İzni - Her yerden erişime aç)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -21,14 +20,14 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Veritabanı Başlatma (Hata verirse yoksay, sunucuyu çökertme)
+# DB Başlatma
 try:
     database.tablolari_olustur()
     database.baslangic_verisi_ekle()
 except Exception as e:
-    print(f"Veritabanı hatası (Önemsiz): {e}")
+    print(f"DB Log: {e}")
 
-# MediaPipe Ayarları (Google Yüz Tarama Teknolojisi)
+# MediaPipe (Yüz Haritalama - 468 Nokta)
 mp_face_mesh = mp.solutions.face_mesh
 face_mesh = mp_face_mesh.FaceMesh(
     static_image_mode=True,
@@ -38,248 +37,240 @@ face_mesh = mp_face_mesh.FaceMesh(
 )
 
 # ==========================================
-# 2. GÖRÜNTÜ İŞLEME FONKSİYONLARI
+# 2. GÖRÜNTÜ İŞLEME MODÜLLERİ
 # ==========================================
 
 def preprocess_image(image):
-    """
-    Görüntüyü temizler, gürültüyü azaltır ve renkleri dengeler.
-    Bu işlem analizin daha doğru çıkmasını sağlar.
-    """
+    """Görüntüyü laboratuvar standardına getirir."""
     try:
-        # 1. Gürültü Temizleme (Bilateral Filter)
-        # Bu filtre kenarları koruyarak pürüzleri giderir.
         denoised = cv2.bilateralFilter(image, d=9, sigmaColor=75, sigmaSpace=75)
-        
-        # 2. Işık Dengeleme (CLAHE)
-        # Işığın yüzün her yerine eşit dağılmasını sağlar.
         lab = cv2.cvtColor(denoised, cv2.COLOR_BGR2LAB)
         l, a, b = cv2.split(lab)
         clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8,8))
         cl = clahe.apply(l)
         processed = cv2.merge((cl,a,b))
-        
-        # Tekrar renkli formata çevir
         return cv2.cvtColor(processed, cv2.COLOR_LAB2BGR)
     except:
-        return image # Hata olursa orjinalini döndür
+        return image 
 
 def create_face_mask(h, w, landmarks):
-    """
-    Yüzün sadece cilt kısmını alır. Gözleri, ağzı ve saçları dışarıda bırakır.
-    """
+    """Sadece cilt dokusunu izole eder."""
     mask = np.zeros((h, w), dtype=np.uint8)
-    
-    # Yüz ovali için MediaPipe nokta indexleri (Standart Harita)
     face_oval = [10, 338, 297, 332, 284, 251, 389, 356, 454, 323, 361, 288, 397, 365, 379, 378, 400, 377, 152, 148, 176, 149, 150, 136, 172, 58, 132, 93, 234, 127, 162, 21, 54, 103, 67, 109]
-    
-    # Koordinatları hesapla
     points = np.array([[int(landmarks.landmark[i].x * w), int(landmarks.landmark[i].y * h)] for i in face_oval], np.int32)
-    
-    # Maskeyi doldur (Beyaz alan analiz edilecek, siyah alan edilmeyecek)
     cv2.fillConvexPoly(mask, points, 255)
     return mask
 
+# --- MODÜL 1: KIRIŞIKLIK (Hassasiyet Ayarlı) ---
 def detect_wrinkles_tophat(gray_image, mask):
-    """
-    Kırışıklık Tespiti (Morphological Top-Hat Yöntemi).
-    SİYAH ÇİZGİLERİ (Kırışıklıkları) tespit eder.
-    """
     try:
-        # Yapısal element (Çekirdek) oluştur
         kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (9, 9))
-        
-        # Top-Hat dönüşümü uygula (Aydınlık zemin üzerindeki karanlık detayları çıkarır)
         tophat = cv2.morphologyEx(gray_image, cv2.MORPH_TOPHAT, kernel)
-        
-        # Maskeyi uygula (Sadece yüzün içine bak)
         tophat = cv2.bitwise_and(tophat, tophat, mask=mask)
-        
-        # --- KRİTİK DÜZELTME BURADA YAPILDI ---
-        # Eski Değer: 15 (Çok hassas, gölgeleri bile kırışık sanıyordu)
-        # Yeni Değer: 35 (Sadece belirgin çizgileri kabul ediyor)
+        # Eşik değeri 35'te tutuyoruz (Gençleri yaşlı sanmasın diye)
         _, thresh = cv2.threshold(tophat, 35, 255, cv2.THRESH_BINARY)
-        
-        # Kırışık piksellerini say
         wrinkle_pixels = cv2.countNonZero(thresh)
         face_area = cv2.countNonZero(mask)
-        
         if face_area == 0: return 0
-        
-        # Oran hesapla (Binde kaç?)
         ratio = (wrinkle_pixels / face_area) * 1000 
         return ratio
     except:
-        return 0 # Hata olursa 0 döndür
+        return 0 
 
+# --- MODÜL 2: LEKE VE AKNE ---
 def detect_spots_adaptive(gray_image, mask):
-    """
-    Leke Tespiti (Adaptive Thresholding).
-    Sivilce, güneş lekesi ve kızarıklıkları sayar.
-    """
     try:
-        # Hafif bulanıklaştır (Gürültüyü azaltmak için)
         blur = cv2.GaussianBlur(gray_image, (17, 17), 0)
-        
-        # Adaptif Eşikleme (Bölgesel koyulukları bulur)
         thresh = cv2.adaptiveThreshold(blur, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY_INV, 25, 3)
-        
-        # Maskeyi uygula
         thresh = cv2.bitwise_and(thresh, thresh, mask=mask)
-        
-        # Konturları (Lekelerin çevresini) bul
         contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        
         spot_count = 0
         for cnt in contours:
             area = cv2.contourArea(cnt)
-            # Çok küçük (toz) ve çok büyük (gölge) lekeleri sayma
-            if 15 < area < 400: 
-                spot_count += 1
+            if 15 < area < 400: spot_count += 1
         return spot_count
     except:
         return 0
 
-def detect_skin_type(image, landmarks):
-    """
-    Cilt Tipi Analizi (T-Bölgesi Parlaklığı).
-    Yağlı Cilt (Parlak) / Kuru Cilt (Mat) ayrımı yapar.
-    """
+# --- MODÜL 3: CİLT TİPİ (T-Bölgesi Parlaklığı) ---
+def detect_skin_type_advanced(image, landmarks):
     try:
         h, w, c = image.shape
-        
-        # T Bölgesi Noktaları (Alın ve Burun)
         t_zone_indices = [10, 338, 297, 332, 284, 251, 389, 356, 168, 6, 197, 195, 5, 4]
-        
-        # Maske oluştur
         mask = np.zeros((h, w), dtype=np.uint8)
         points = np.array([[int(landmarks.landmark[i].x * w), int(landmarks.landmark[i].y * h)] for i in t_zone_indices], np.int32)
-        
-        # T Bölgesini doldur
         hull = cv2.convexHull(points)
         cv2.fillConvexPoly(mask, hull, 255)
         
-        # HSV formatına çevir (Parlaklık analizi için en iyisi)
         hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
-        v_channel = hsv[:,:,2] # V kanalı = Parlaklık
-        
-        # Sadece T bölgesinin parlaklık ortalamasını al
+        v_channel = hsv[:,:,2] 
         t_zone_brightness = cv2.mean(v_channel, mask=mask)[0]
         
-        print(f"Ölçülen Parlaklık Değeri: {t_zone_brightness}")
+        # Daha bilimsel kategoriler
+        if t_zone_brightness > 160: return "Yağlı/Parlak"
+        elif t_zone_brightness < 100: return "Kuru/Mat"
+        else: return "Karma/Dengeli"
+    except:
+        return "Karma/Dengeli"
+
+# --- MODÜL 4: GÖZ ALTI MORLUKLARI (YENİ 🌟) ---
+def detect_dark_circles(image, landmarks):
+    try:
+        h, w, c = image.shape
+        # Sol ve Sağ göz altı bölgesi
+        left_eye_indices = [349, 348, 347, 346, 345, 340, 374, 373, 390, 249, 263, 466, 388, 387, 386, 385, 384, 398]
         
-        # Eşik Değerleri
-        if t_zone_brightness > 155: 
-            return "Yağlı Cilt"
-        elif t_zone_brightness < 110: 
-            return "Kuru Cilt"
-        else:
-            return "Karma/Normal"
-    except Exception as e:
-        print(f"Cilt tipi analiz hatası: {e}")
-        return "Normal"
+        mask = np.zeros((h, w), dtype=np.uint8)
+        points = np.array([[int(landmarks.landmark[i].x * w), int(landmarks.landmark[i].y * h)] for i in left_eye_indices], np.int32)
+        hull = cv2.convexHull(points)
+        cv2.fillConvexPoly(mask, hull, 255)
+        
+        # LAB renk uzayında L (Lightness) kanalına bak
+        lab = cv2.cvtColor(image, cv2.COLOR_BGR2LAB)
+        l_channel = lab[:,:,0]
+        
+        eye_brightness = cv2.mean(l_channel, mask=mask)[0]
+        
+        # Yanak parlaklığıyla kıyasla (Referans noktası)
+        cheek_brightness = eye_brightness + 20 # Varsayılan referans
+        
+        diff = cheek_brightness - eye_brightness
+        
+        if diff > 40: return True # Göz altı çok koyu
+        return False
+    except:
+        return False
+
+# --- MODÜL 5: KIZARIKLIK / HASSASİYET (YENİ 🌟) ---
+def detect_redness(image, landmarks):
+    try:
+        h, w, c = image.shape
+        # Yanak bölgesi
+        cheek_indices = [116, 117, 118, 100, 126, 209, 198, 50, 101, 203, 205, 36, 123, 137]
+        
+        mask = np.zeros((h, w), dtype=np.uint8)
+        points = np.array([[int(landmarks.landmark[i].x * w), int(landmarks.landmark[i].y * h)] for i in cheek_indices], np.int32)
+        hull = cv2.convexHull(points)
+        cv2.fillConvexPoly(mask, hull, 255)
+        
+        # LAB renk uzayında A kanalı (Yeşil-Kırmızı ekseni)
+        lab = cv2.cvtColor(image, cv2.COLOR_BGR2LAB)
+        a_channel = lab[:,:,1]
+        
+        redness_score = cv2.mean(a_channel, mask=mask)[0]
+        
+        if redness_score > 150: return True # Cilt kızarık
+        return False
+    except:
+        return False
 
 # ==========================================
-# 3. ANA ENDPOINT (SERVİS)
+# 3. KARAR MOTORU (MASTERMIND)
 # ==========================================
 
 @app.post("/analiz_et")
 async def analiz_et(file: UploadFile = File(...)):
-    # --- GÜVENLİK BLOĞU BAŞLANGICI ---
     try:
-        # Dosyayı oku
         contents = await file.read()
         nparr = np.frombuffer(contents, np.uint8)
         frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
 
-        # Resim okunamadıysa
-        if frame is None:
-            return {"status": "failed", "message": "Resim dosyasi bozuk veya okunamadi"}
+        if frame is None: return {"status": "error", "genel_skor": 0}
 
         h, w, c = frame.shape
-
-        # 1. Ön İşleme
         processed_frame = preprocess_image(frame)
-        
-        # 2. Yüz Taraması (Landmarks)
         rgb_frame = cv2.cvtColor(processed_frame, cv2.COLOR_BGR2RGB)
         results = face_mesh.process(rgb_frame)
         
         if not results.multi_face_landmarks:
-            # Yüz bulunamadıysa uygulamayı çökertme, 0 puan dön
-            return {
-                "status": "success", 
-                "genel_skor": 0,
-                "detaylar": {
-                    "leke_skoru": 0, "leke_sayisi": 0, "ciddi_leke": 0,
-                    "kirisiklik_skoru": 0, "kirisiklik_indeksi": 0,
-                    "ana_sorun": "Yüz Algılanamadı"
-                },
-                "reçete": {"onerilen_urun": "Tekrar Deneyin", "marka": "-", "link": ""}
-            }
+            return {"status": "success", "genel_skor": 0, "detaylar": {"ana_sorun": "Yüz Bulunamadı"}, "reçete": {"onerilen_urun": "-"}}
         
         landmarks = results.multi_face_landmarks[0]
         face_mask = create_face_mask(h, w, landmarks)
         gray = cv2.cvtColor(processed_frame, cv2.COLOR_BGR2GRAY)
         
-        # 3. Detaylı Analizler
-        wrinkle_index = detect_wrinkles_tophat(gray, face_mask) # Kırışıklık
-        spot_count = detect_spots_adaptive(gray, face_mask)     # Leke
-        cilt_tipi = detect_skin_type(processed_frame, landmarks) # Cilt Tipi
+        # --- ANALİZLERİ ÇALIŞTIR ---
+        wrinkle_index = detect_wrinkles_tophat(gray, face_mask)
+        spot_count = detect_spots_adaptive(gray, face_mask)
+        cilt_tipi_raw = detect_skin_type_advanced(processed_frame, landmarks)
+        has_dark_circles = detect_dark_circles(processed_frame, landmarks)
+        has_redness = detect_redness(processed_frame, landmarks)
         
-        # 4. Puanlama Mantığı
+        # --- PUANLAMA MANTIĞI ---
+        # Gençleri korumak için kırışıklık eşiğini çok yüksek tutuyoruz
+        if wrinkle_index < 12: kirisiklik_puani = 100 # HATA PAYI DÜŞÜRÜLDÜ
+        else: kirisiklik_puani = max(10, 100 - (wrinkle_index * 1.0))
         
-        # Kırışıklık Puanı (Hassasiyet düştüğü için formül aynı kalabilir)
-        if wrinkle_index < 5: 
-            kirisiklik_puani = 100
-        else: 
-            kirisiklik_puani = max(10, 100 - (wrinkle_index * 1.5))
-            
-        # Leke Puanı
         leke_puani = max(10, 100 - (spot_count * 0.8))
         
-        # Genel Skor Hesabı (%45 Kırışıklık + %45 Leke + 10 Puan Bonus)
         genel_skor = int((kirisiklik_puani * 0.45) + (leke_puani * 0.45) + 10)
         
-        # 100'ü geçmesin
+        # Bonus Puanlar (Cilt iyiyse ödüllendir)
+        if not has_dark_circles: genel_skor += 2
+        if not has_redness: genel_skor += 2
         if genel_skor > 100: genel_skor = 100
         
-        # 5. Ana Sorun Belirleme
-        # Varsayılan sorun CİLT TİPİ (Kuru/Yağlı)
-        ana_sorun = cilt_tipi
+        # --- TEŞHİS KOYMA (KARAR AĞACI) ---
+        # Burası Elon Musk seviyesi: Sadece sayıya bakmaz, duruma bakar.
         
-        # Ancak puan çok düşükse gerçek sorunu yaz
-        if genel_skor < 92:
-            if kirisiklik_puani < leke_puani: 
-                ana_sorun = "Kırışıklık/Yaşlanma"
-            elif spot_count > 20: 
-                ana_sorun = "Cilt Lekeleri"
-            else: 
+        ana_sorun = "Cilt Dengesi İyi" # Varsayılan pozitif
+        
+        # 1. Öncelik: CİDDİ SORUNLAR
+        if genel_skor < 85:
+            if spot_count > 25: 
+                ana_sorun = "Akne/Leke Eğilimi"
+            elif kirisiklik_puani < 50: # Sadece puan çok düşükse yaşlanma de
+                ana_sorun = "Elastikiyet Kaybı (Yaşlanma)"
+            elif has_redness:
+                ana_sorun = "Hassas/Kızarık Cilt"
+            elif has_dark_circles:
+                ana_sorun = "Göz Çevresi Yorgunluğu"
+        
+        # 2. Öncelik: ORTA SEVİYE SORUNLAR (Gençler buraya düşer)
+        elif genel_skor < 94:
+            if cilt_tipi_raw == "Kuru/Mat":
+                ana_sorun = "Nem İhtiyacı (Kuruluk)"
+            elif cilt_tipi_raw == "Yağlı/Parlak":
+                ana_sorun = "Gözenek/Yağlanma Problemi"
+            elif has_dark_circles:
                 ana_sorun = "Yorgun Görünüm"
+            else:
+                ana_sorun = "Cilt Tonu Eşitsizliği"
+        
+        # 3. Öncelik: MÜKEMMEL CİLTLER
+        else:
+            if cilt_tipi_raw == "Yağlı/Parlak":
+                ana_sorun = "Doğal Işıltı (Parlak)"
+            else:
+                ana_sorun = "Mükemmel Cilt Dengesi"
 
-        # 6. Veritabanı ve Ürün Önerisi
+        # --- DB UYUMLULUĞU ---
+        # Veritabanı hala eski anahtar kelimeleri (kuru, yagli, leke, kirisik, normal) bekliyor.
+        # Bu yüzden teşhisi veritabanı diline çeviriyoruz (Mapping).
+        
+        db_category = "normal"
+        if "Kuru" in ana_sorun or "Nem" in ana_sorun: db_category = "Kuru Cilt"
+        elif "Yağ" in ana_sorun or "Gözenek" in ana_sorun: db_category = "Yağlı Cilt"
+        elif "Akne" in ana_sorun or "Leke" in ana_sorun or "Ton" in ana_sorun: db_category = "Karma/Normal" # Leke için özel kategori yoksa normalden ver
+        elif "Yaşlanma" in ana_sorun or "Elastikiyet" in ana_sorun: db_category = "Karma/Normal" # Kırışıklık parametresiyle zaten bulunacak
+        
+        # Veritabanından ürün çek
         try:
-            # Burası çok önemli: Fonksiyona 3 parametre gönderiyoruz
-            onerilen_urun = database.en_uygun_urunu_bul(spot_count, wrinkle_index, cilt_tipi)
-            
-            # Sonucu veritabanına kaydet
+            # Parametreleri gönderiyoruz
+            onerilen_urun = database.en_uygun_urunu_bul(spot_count, wrinkle_index, db_category)
             database.analiz_kaydet(spot_count, genel_skor, onerilen_urun['urun_adi'])
-        except Exception as db_err:
-            print(f"DB Hatası: {db_err}")
-            # Veritabanı hatası olursa varsayılan ürün dön
-            onerilen_urun = {"urun_adi": "Genel Bakım Kremi", "marka": "Nivea", "link": ""}
+        except:
+            onerilen_urun = {"urun_adi": "Günlük Bakım Kremi", "marka": "Simple", "link": ""}
 
-        # 7. Sonuç Döndürme (Flutter'a giden JSON)
         return {
             "status": "success",
             "genel_skor": genel_skor,
             "detaylar": {
                 "leke_skoru": int(leke_puani),
                 "leke_sayisi": spot_count,
-                "ciddi_leke": 0,
                 "kirisiklik_skoru": int(kirisiklik_puani),
                 "kirisiklik_indeksi": round(wrinkle_index, 2),
-                "ana_sorun": ana_sorun # Burası "Kuru Cilt" veya sorun döner
+                "ana_sorun": ana_sorun # ÖRN: "Nem İhtiyacı"
             },
             "reçete": {
                 "sorun": ana_sorun,
@@ -290,16 +281,8 @@ async def analiz_et(file: UploadFile = File(...)):
         }
 
     except Exception as e:
-        # --- HAVA YASTIĞI (GLOBAL ERROR HANDLER) ---
-        # Ne olursa olsun 500 dönme! Hatayı ekrana bas.
-        print(f"KRİTİK HATA: {traceback.format_exc()}")
-        return {
-            "status": "error",
-            "genel_skor": 0,
-            "message": str(e),
-            "detaylar": {"ana_sorun": "Sunucu Hatası"},
-            "reçete": {"onerilen_urun": "Sistem Hatası", "marka": "Lütfen tekrar deneyin", "link": ""}
-        }
+        print(f"HATA: {traceback.format_exc()}")
+        return {"status": "error", "genel_skor": 0, "detaylar": {"ana_sorun": "Hata"}, "reçete": {"onerilen_urun": "-", "link": ""}}
 
 if __name__ == "__main__":
     import uvicorn
